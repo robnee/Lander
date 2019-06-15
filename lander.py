@@ -45,10 +45,44 @@ class Part(ShapeNode, Particle):
         path.line_to(pt.x, pt.y)
         ShapeNode.__init__(self, path=path, fill_color='clear', stroke_color='#bbb')
         Particle.__init__(self)
-        
-        
+
+
+class Sound(Node):
+    def __init__(self, sound):
+        super().__init__()
+        self.sound = sound
+        self.effect = None
+        self.state = 'stop'
+
+    def play(self, volume):
+        if self.state == 'stop':
+            self.effect = sound.play_effect(self.sound, looping=True, volume=volume)
+            self.state = 'play'
+        else:
+            self.set_volume(volume)
+
+    def set_volume(self, vol):
+        self.effect.volume = vol
+
+    def ramp(self, node, progress):
+        self.set_volume(1.0 - progress)
+    
+    def done(self):
+        self.state = 'stop'
+        self.effect.stop()
+        self.effect = None
+
+    def stop(self):
+        if self.state == 'play' and self.effect:
+            self.run_action(A.sequence(A.call(self.ramp, 0.5), A.call(self.done)))
+            self.state = 'stopping'
+ 
+
 class Ship(ShapeNode, Particle):
     '''Player's ship'''
+    
+    MAX_THRUST = 4.0
+
     def __init__(self):
         ShapeNode.__init__(self, path=self.ship_path(), fill_color='clear', stroke_color='#bbb')
         Particle.__init__(self)
@@ -61,6 +95,9 @@ class Ship(ShapeNode, Particle):
         self.fuel = 5000
         self.mass = 1000
         self.thrust = 0
+        self.thrust_ramp = 0
+        self.thrust_sound = Sound('thrust.mp3')
+        self.add_child(self.thrust_sound)
             
     def null(self):
         self.r = math.pi/2
@@ -69,6 +106,10 @@ class Ship(ShapeNode, Particle):
         self.vy = 0
   
     def update(self, dt):
+        if self.thrust_ramp:
+            self.set_thrust(max(self.thrust - self.thrust_ramp, 0))
+            self.thrust_ramp = min(self.thrust_ramp, self.thrust)
+
         dfuel = self.thrust * 10 * dt
         if self.fuel < dfuel:
             self.set_thrust(self.fuel / (10 * dt))
@@ -88,11 +129,21 @@ class Ship(ShapeNode, Particle):
         if self.fuel <= 0:
             level = 0
             
-        self.thrust = level
-            
-        self.flame.path = self.flame_path(level)
+        self.thrust = min(level, self.MAX_THRUST)
+    
+        self.flame.path = self.flame_path(self.thrust)
         self.flame.position = ((-30 - self.flame.path.bounds.w) / 2, 0)
         
+        if level > 0.0:
+            self.thrust_sound.play(self.thrust / self.MAX_THRUST)
+        else:
+            self.thrust_sound.stop()
+
+    def crash(self):
+        self.thrust_sound.stop()
+        sound.play_effect('explosion_large_distant.mp3')
+        self.fuel = max(self.fuel - 50, 0)
+               
     def rotate(self, level):
         #force =
         self.ar = max(min(-level / 1000, 0.01), -0.01)
@@ -276,19 +327,22 @@ class MyScene(Scene):
 
     def touch_moved(self, touch):
         if self.running:
+            self.thrust_ramp = 0
             self.ship.set_thrust(max((touch.location.y - self.touch_home.y - 5) / 10, 0))
-            if abs(touch.location.x - self.touch_home.x) > 10:
-                self.ship.rotate(-(touch.location.x - self.touch_home.x) / 40)
+            if not self.landed and abs(touch.location.x - self.touch_home.x) > 15:
+                self.ship.rotate((touch.location.x - self.touch_home.x) / 50)
+            else:
+                self.ship.rotate(0.0)           
 
     def touch_ended(self, touch):
-        self.ship.set_thrust(0)
+        self.ship.thrust_ramp = 0.5
         self.ship.rotate(0)
 
     def controller_changed(self, id, key, value):
         if key == 'thumbstick_left':
             self.ship.rotate(value[0])
         elif key == 'trigger_right':
-            self.ship.set_thrust(value)
+            self.ship.set_thrust(value * 4)
         elif key == 'button_b' and value:
             self.fire()
         elif key == 'button_x' and value:
@@ -324,7 +378,9 @@ class MyScene(Scene):
         bullet.position = self.ship.position + cannon
         end = bullet.position + Point(math.cos(r), math.sin(r)) * 350
 
-        bullet.run_action(A.sequence(A.move_to(end.x, end.y, 1.5)))
+        bullet.run_action(A.sequence(A.move_to(end.x, end.y, 1.5), A.remove()))
+        
+        sound.play_effect('fire.mp3', looping=False, volume=0.0)
 
     def drop_ship(self, length):
         x = random.uniform(length/8, length * 7 / 8)
@@ -343,8 +399,7 @@ class MyScene(Scene):
     def crash(self):
         print('crash', self.ship.vx, self.ship.vy)
 
-        sound.play_effect('explosion_large_distant.mp3')
-        self.ship.fuel = max(self.ship.fuel - 50, 0)
+        self.ship.crash()
         self.ship.remove_from_parent()
 
         for x in [10, 10, 30, 30]:
@@ -372,4 +427,5 @@ class MyScene(Scene):
     
 
 if __name__ == '__main__':
+    sound.stop_all_effects()
     run(MyScene(), show_fps=False)
