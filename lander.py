@@ -92,6 +92,7 @@ class Ship(ShapeNode, Particle):
         self.ljet = ShapeNode(path=self.no_flame, fill_color=(0, 0, 1.0, 0.1), stroke_color=(0, 1.0, 1.0, 0.5), parent=self)
         self.rjet = ShapeNode(path=self.no_flame, fill_color=(0, 0, 1.0, 0.1), stroke_color=(0, 1.0, 1.0, 0.5), parent=self)
         
+        print('ship:', self.position)
         self.fuel = 5000
         self.mass = 1000
         self.thrust = 0
@@ -174,12 +175,17 @@ class Ship(ShapeNode, Particle):
         path.line_width = 1.5
         path.line_cap_style = ui.LINE_CAP_ROUND
         path.line_join_style = ui.LINE_JOIN_ROUND
-        path.move_to(0, 0)
-        path.line_to(30, 10)
-        path.line_to(0, 20)
-        path.line_to(5, 10)
-        path.line_to(0, 0)
+        #path.move_to(0, 0)
+        #path.line_to(30, 10)
+        #path.line_to(0, 20)
+        #path.line_to(5, 10)
+        #path.line_to(0, 0)
         
+        self.points = [(-15, -10), (15, 0), (-15, 10), (-10, 0), (-15, -10)]
+        path.move_to(*self.points[0])
+        for p in self.points[1:]:
+            path.line_to(*p)
+
         return path
         
     def flame_path(self, level):
@@ -245,8 +251,17 @@ class Mountain:
                         return False
                 pp = p
         return False
-        
-        
+
+    def is_above_ground(self, particle, dy):
+        #ground_level = self.get_y(p.x) + dy
+        #return p.y > ground_level
+        for px, py in particle.points:
+            if particle.y + py < self.get_y(particle.x + px):
+                return False
+                
+        return True
+
+
 class MyScene(Scene):
     def setup(self):
         self.label = LabelNode(text='', font=('Helvetica Neue', 20), parent=self)
@@ -288,23 +303,24 @@ class MyScene(Scene):
         if self.running:
             self.ship.update(self.dt)
 
-            y = self.mtdata.get_y(self.ship.x) + 20
+            # adjusted gl.  20 is approx ship radius
+            adj = 20
 
             if self.landed:
-                if self.ship.y > y:
+                if self.mtdata.is_above_ground(self.ship, adj):
                     self.landed = False
-                    self.label.text = ''
+                    self.label.text = ''    
                 else:
-                    self.ship.y = y
+                    self.ship.y = self.mtdata.get_y(self.ship.x) + adj
                     self.ship.null()
-            elif self.ship.y < y and self.ship.vy < 0:
+            elif not self.mtdata.is_above_ground(self.ship, adj) and self.ship.vy < 0:
                 level = self.mtdata.is_level(self.ship.x - 10, self.ship.x + 10)
                 self.label.text = 'vx:{:4.2f} vy:{:4.2f} l:{:}'.format(self.ship.vx, self.ship.vy, level)
                 if self.ship.vy < -1 or abs(self.ship.vx) > 0.30 or not level:
                     self.crash()
                 else:
                     self.land()
-                self.ship.y = y
+                self.ship.y = self.mtdata.get_y(self.ship.x) + adj
 
         self.set_scale()
 
