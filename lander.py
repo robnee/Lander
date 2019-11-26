@@ -1,9 +1,13 @@
-from scene import *
+from scene import Scene, Node, ShapeNode, LabelNode, Size, Point, Action as A, run
 import ui
 import sound
 import random
 import math
-A = Action
+
+"""
+todo: increase magnification level
+precnned mountains for testing
+"""
 
 
 def make_path(points):
@@ -52,9 +56,6 @@ class Particle:
         self.vy = self.vy * 0.999 + self.ay + self.gy
         self.x += self.vx
         self.y += self.vy
-        
-        # map to node
-        self.rotation = self.r
 
     def null(self):
         self.r = 0
@@ -100,7 +101,7 @@ class Sound(Node):
         self.effect.volume = vol
 
     def ramp(self, node, progress):
-        self.set_volume(1.0 - progress)
+        self.set_volume(self.ramp_start * (1.0 - progress))
     
     def done(self):
         self.state = 'stop'
@@ -109,7 +110,8 @@ class Sound(Node):
 
     def stop(self):
         if self.state == 'play' and self.effect:
-            self.run_action(A.sequence(A.call(self.ramp, 0.5), A.call(self.done)))
+            self.ramp_start = self.effect.volume
+            self.run_action(A.sequence(A.call(self.ramp, 0.2), A.call(self.done)))
             self.state = 'stopping'
  
 
@@ -182,7 +184,7 @@ class Ship(ShapeNode, Particle):
             
             p.vr = random.uniform(-0.2, 0.2)
             p.vx = self.vx + random.uniform(-1, 1)
-            p.vy = random.uniform(0, 3)
+            p.vy = self.vy * -0.3 + 1
             p.run_action(A.sequence(A.fade_to(0.50, 5), A.remove()))
 
             self.parent.add_child(p)
@@ -209,7 +211,7 @@ class Ship(ShapeNode, Particle):
             self.ljet.path = self.no_flame
 
     def ship_path(self):
-        self.points = [(-10, -15), (0, 15), (10,-15), (0, -10), (-10, -15)]
+        self.points = [(-10, -15), (0, 15), (10, -15), (0, -10), (-10, -15)]
         path = make_path(self.points)
         path.line_width = 1.5
 
@@ -248,16 +250,23 @@ class Mountain:
         path.line_width = 1.0
 
         return path
-        
-    def get_y(self, x):
+
+    def get_points(self, x):
         if x >= 0:
-            pp = Point(0, 0)
-            for p in self.points:
+            pp = self.points[0]
+            for p in self.points[1:]:
                 if x < p.x:
-                    slope = (p.y - pp.y) / (p.x - pp.x)
-                    return pp.y + slope * (x - pp.x)
+                    return pp, p
                 pp = p
-            
+
+        return None, None
+             
+    def get_y(self, x):
+        pp, p = self.get_points(x)
+        if pp and p:
+            slope = (p.y - pp.y) / (p.x - pp.x)
+            return pp.y + slope * (x - pp.x)
+  
         return 0
 
     def is_level(self, x1, x2):
@@ -283,13 +292,14 @@ class MyScene(Scene):
         self.paused = True
         self.running = False
         self.landings = 0
+        self.crashes = 0
 
         self.ship = Ship()
         self.ship.z_position = 1
         self.add_child(self.ship)
 
         self.mtdata = Mountain(Size(5000, 300))
-        path = self.mtdata.gen_path(1/3)
+        path = self.mtdata.gen_path(1 / 3)
 
         self.mt = ShapeNode(path=path, fill_color=self.background_color, stroke_color='#bbb')
         self.mt.scale = 3
@@ -311,17 +321,6 @@ class MyScene(Scene):
         pass
     
     def update(self):
-        for c in self.children:
-            if isinstance(c, Part):
-                c.update(self.dt)
-                if not self.mtdata.is_above_ground(c, 0):
-                    c.y = self.mtdata.get_y(c.x)
-                    c.vr = 0
-                    c.vx = -c.vx / 2
-
-                # viewport is centered on ship so adjust for that
-                c.position = ((self.size.x / self.scale / 2) + c.x - self.ship.x, c.y)
-                    
         if self.running:
             self.ship.update(self.dt)
 
@@ -340,7 +339,7 @@ class MyScene(Scene):
                 hot = abs(self.ship.vy) > 1.0 or abs(self.ship.vx) > 0.30 or not level
 
                 self.label.text = f'vx:{self.ship.vx:+4.2f} vy:{self.ship.vy:+4.2f} r:{self.ship.r:4.2f} l:{level}'
-                self.label.color = 'red' if hot else 'white'
+                self.label.color = '#f44' if hot else 'white'
 
                 if not self.mtdata.is_above_ground(self.ship, adj) and self.ship.vy < 0:
                     if hot:
@@ -349,35 +348,72 @@ class MyScene(Scene):
                         self.land()
                     self.ship.y = self.mtdata.get_y(self.ship.x) + adj
 
+        # recompute scale and update positions of all children
         self.update_scale()
+        
+        for c in self.children:
+            if isinstance(c, Part):
+                c.update(self.dt)
+                if not self.mtdata.is_above_ground(c, 0):
+                    c.y = self.mtdata.get_y(c.x)
+                    c.vr = 0
+                    c.vx = -c.vx / 2
 
-        self.ship.position = (self.size.x / self.scale / 2, self.ship.y)
-        self.mt.position = ((self.size.x / self.scale / 2) - self.ship.x, 0)
+                # viewport is centered on ship so just adjust for that
+                c.position = (self.size.w / self.scale / 2 + c.x - self.ship.x, c.y)
+                c.rotation = c.r
+
+        self.ship.position = Point(self.size.w / self.scale / 2, self.ship.y)
+        self.ship.rotation = self.ship.r
+        
+        self.stats.position = Point(self.size.w / 2, self.size.h - 40) / self.scale
+        self.stats.scale = 1 / self.scale
+        self.label.position = Point(self.size.w / 2, self.size.h - 20) / self.scale
+        self.label.scale = 1 / self.scale
+        self.mt.position = Point(self.size.w / self.scale / 2 + 0 - self.ship.x, 0)
 
         self.update_status()
 
+    def update_scale(self):
+        ship_ceiling = 0.75
+        if self.ship.y > self.size.h * ship_ceiling:
+            value = self.size.h * ship_ceiling / abs(self.ship.y) + 0.01
+        else:
+            value = 1
+
+        self.scale = abs(value)
+
     def update_status(self):
-        self.stats.text = 'f: {:+4.0f}  a: {:4.2f}  r: {:+5.3f} {:+5.3f}  p: {:+4.1f},{:+4.0f},{:+4.0f} l: {:}'.format(
-            self.ship.fuel, self.ship.a * 10, self.ship.ar * 1000, self.ship.vr * 1000, self.ship.rotation, self.ship.x, self.ship.y, self.landings)
+        self.stats.text = 'f: {:4.0f}  pos: {:+4.0f},{:4.0f}  a: {:4.2f}  r: {:+5.3f} ar: {:+5.3f} vr: {:+5.3f}  c/l: {}/{:}'.format(
+            self.ship.fuel, self.ship.x, self.ship.y, self.ship.a * 10, self.ship.r, self.ship.ar * 1000, self.ship.vr * 1000, self.crashes, self.landings)
 
     def touch_began(self, touch):
         if self.running:
-            self.touch_home = touch.location
+            if touch.location.x < self.size.x / 2:
+                self.left_touch = touch
+            else:
+                self.right_touch = touch
         else:
             self.reset()
 
     def touch_moved(self, touch):
         if self.running:
             self.thrust_ramp = 0
-            self.ship.set_thrust(max((-touch.location.y + self.touch_home.y - 5) / 10, 0))
-            if not self.landed and abs(touch.location.x - self.touch_home.x) > 20:
-                self.ship.rotate((touch.location.x - self.touch_home.x) / 50)
+            if touch.location.x < self.size.x / 2:
+                dist = touch.location.x - self.left_touch.location.x
+                if not self.landed and abs(dist) > 20:
+                    self.ship.rotate(dist / 50)
+                else:
+                    self.ship.rotate(0.0)
             else:
-                self.ship.rotate(0.0)
+                dist = -touch.location.y + self.right_touch.location.y
+                self.ship.set_thrust(max((dist - 5) / 10, 0))
 
     def touch_ended(self, touch):
-        self.ship.thrust_ramp = 0.5
-        self.ship.rotate(0)
+        if touch.location.x < self.size.x / 2:
+            self.ship.rotate(0)
+        else:
+            self.ship.thrust_ramp = 0.5
 
     def controller_changed(self, id, key, value):
         if key == 'thumbstick_left':
@@ -391,25 +427,9 @@ class MyScene(Scene):
         elif key == 'button_y' and value:
             self.ship.fuel += 100
 
-    def update_scale(self):
-        if self.ship.y > self.size.h * 0.75:
-            value = self.size.h * 0.75 / abs(self.ship.y) + 0.01
-        else:
-            value = 1.0
-
-        value = abs(value)
-        self.scale = value
-
-        self.stats.position = (self.size.w / self.scale / 2, (self.size.h - 40) / value)
-        self.stats.scale = 1 / value
-        self.label.position = (self.size.w / self.scale / 2, (self.size.h - 20) / value)
-        self.label.scale = 1 / value
-
     def fire(self):
         path = make_path([(0, 0), (0, 1)])
         path.line_width = 2
-        path.line_cap_style = ui.LINE_CAP_ROUND
-        path.line_join_style = ui.LINE_JOIN_ROUND
         bullet = ShapeNode(path=path, fill_color='clear', stroke_color='white', parent=self)
 
         r = self.ship.rotation
@@ -422,16 +442,15 @@ class MyScene(Scene):
         sound.play_effect('fire.mp3', looping=False, volume=0.0)
 
     def drop_ship(self, length):
-        x = random.uniform(length / 8, length * 7 / 8)
-
-        while x < length:
+        while True:
+            x = random.uniform(length / 8, length * 7 / 8)
             if self.mtdata.is_level(x - 10, x + 10):
                 break
-            x += 30
 
+        self.landed = True
         self.ship.x = x
         self.ship.y = self.mtdata.get_y(x)
-        self.landed = True
+        self.ship.alpha = 1
 
         print('dropped:', self.ship.x, self.ship.y, self.ship.r)
 
@@ -439,9 +458,10 @@ class MyScene(Scene):
         print('crash', self.ship.vx, self.ship.vy)
 
         self.ship.crash()
-        self.ship.remove_from_parent()
+        self.ship.alpha = 0.0
 
         self.running = False
+        self.crashes += 1
 
     def land(self):
         self.landed = True
@@ -453,7 +473,6 @@ class MyScene(Scene):
     def reset(self):
         self.ship.null()
         self.drop_ship(5000)
-        self.add_child(self.ship)
         self.label.text = ''
         self.running = True
         self.paused = False
