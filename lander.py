@@ -9,6 +9,9 @@ todo: increase magnification level
 precnned mountains for testing
 """
 
+MAX_EXTENT = 2000
+""" ui.Path coordinates greater than 2047 cause exceptions """
+
 
 def make_path(points, line_width=1.0):
     path = ui.Path()
@@ -226,38 +229,53 @@ class Ship(ShapeNode, Particle):
             return ui.Path()
         
         
-class Mountain(ShapeNode):
+class Mountain(Node):
+    
     def __init__(self, size):
-        self.gen_points(size)
-
-        # shapes cant be larger than 2048 wide
-        downscale = size.x / 2047
-
-        ShapeNode.__init__(self, path=self.gen_path(1 / downscale), fill_color='clear', stroke_color='#bbb')
-        self.scale = downscale
+        Node.__init__(self)
         self.anchor_point = (0, 0)
-
-    def gen_points(self, size):
+        
+        self.generate_mountain(size)
+        self.generate_shapes()
+    
+    def generate_mountain(self, size):
         self.points = [Point(0, 0), Point(20, 20)]
         x, y = 10, 10
         while x < size.w:
-            dx = random.uniform(50, 100)
-            if random.uniform(0, 1) < 0.5:
+            dx = random.uniform(40, 80)
+            if random.uniform(0, 1) < 0.6:
                 dy = random.uniform(-size.h, size.h)
             else:
                 dy = 0
             x = min(x + dx, size.w)
             y = max(y + dy, 20)
+            y = min(y, MAX_EXTENT)
+
             self.points.append(Point(x, y))
-        
-    def gen_path(self, scale):
-        """ scale points and make path """
 
-        path = make_path([(x * scale, y * scale) for x, y in self.points])
-        path.line_width = 1.5/5
+    def generate_shapes(self):
+        start_i = 0
+        end = self.points[-1]
+        for i, p in enumerate(self.points):
+            start_x = self.points[start_i].x
+            width = p.x - start_x
+            # shapes cant be larger than 2048 wide so create multiple ShapeNodes
+            if width > MAX_EXTENT or p == end:
+                # get a sublist of points adjusted for the start of the panel
+                points = [p - Point(start_x, 0) for p in self.points[start_i:i]]
+                path = make_path(points, 1.5)
+                
+                # add a tick mark to make sure that 0, 0 is represented for alignment
+                path.move_to(0, 0)
+                path.line_to(0.1, 0)
 
-        return path
+                panel = ShapeNode(path=path, fill_color='clear', stroke_color='#bbb')
+                panel.anchor_point = (0, 0)
+                panel.position = (start_x, 0)
+                self.add_child(panel)
 
+                start_i = i - 1
+    
     def get_points(self, x):
         if x >= 0:
             pp = self.points[0]
@@ -300,6 +318,8 @@ class MyScene(Scene):
         self.running = False
         self.landings = []
         self.crashes = 0
+        self.left_touch = None
+        self.right_touch = None
 
         self.ship = Ship()
         self.ship.z_position = 1
@@ -327,7 +347,7 @@ class MyScene(Scene):
             self.ship.update(self.dt)
 
             # adjusted gl.  20 is approx ship radius
-            adj = 20
+            adj = 17
 
             if self.landed:
                 if self.mt.is_above_ground(self.ship, adj):
@@ -402,13 +422,13 @@ class MyScene(Scene):
     def touch_moved(self, touch):
         if self.running:
             self.thrust_ramp = 0
-            if touch.location.x < self.size.x / 2:
+            if self.left_touch and touch.location.x < self.size.x / 2:
                 dist = touch.location.x - self.left_touch.location.x
                 if not self.landed and abs(dist) > 20:
                     self.ship.rotate(dist / 50)
                 else:
                     self.ship.rotate(0.0)
-            else:
+            elif self.right_touch:
                 dist = -touch.location.y + self.right_touch.location.y
                 self.ship.set_thrust(max((dist - 5) / 10, 0))
 
