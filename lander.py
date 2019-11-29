@@ -10,18 +10,22 @@ precnned mountains for testing
 """
 
 
-def make_path(points):
+def make_path(points, line_width=1.0):
     path = ui.Path()
     path.line_cap_style = ui.LINE_CAP_ROUND
     path.line_join_style = ui.LINE_JOIN_ROUND
-
+    path.line_width = line_width
+    
     move = True
     for p in points:
         if p:
             x, y = p
+            if x > 2047:
+                raise ValueError(p)
+
             if move:
                 path.move_to(x, -y)
-                move = False
+                move = False    
             else:
                 path.line_to(x, -y)
         else:
@@ -118,7 +122,7 @@ class Sound(Node):
 class Ship(ShapeNode, Particle):
     '''Player's ship'''
     
-    MAX_THRUST = 4.0
+    MAX_THRUST = 5
 
     def __init__(self):
         ShapeNode.__init__(self, path=self.ship_path(), fill_color='clear', stroke_color='#bbb')
@@ -185,18 +189,17 @@ class Ship(ShapeNode, Particle):
             p.vr = random.uniform(-0.2, 0.2)
             p.vx = self.vx + random.uniform(-1, 1)
             p.vy = self.vy * -0.3 + 1
-            p.run_action(A.sequence(A.fade_to(0.50, 5), A.remove()))
+            p.run_action(A.sequence(A.fade_to(0.25, 30), A.remove()))
 
             self.parent.add_child(p)
 
     def rotate(self, level):
         #force =
-        self.ar = max(min(-level / 1500, 0.01), -0.01)
+        self.ar = max(min(-level / 1600, 0.01), -0.01)
 
         tail = self.ar * 10000
         
-        path = make_path([(0, 0), (tail, 0)])
-        path.line_width = 2
+        path = make_path([(0, 0), (tail, 0)], 2)
                         
         if tail > 1:
             self.ljet.position = (5 + tail / 2, 10)
@@ -212,26 +215,30 @@ class Ship(ShapeNode, Particle):
 
     def ship_path(self):
         self.points = [(-10, -15), (0, 15), (10, -15), (0, -10), (-10, -15)]
-        path = make_path(self.points)
-        path.line_width = 1.5
-
-        return path
+        return make_path(self.points, 1.5)
         
     def flame_path(self, level):
         if level > 0:
             tail = level * 40
         
-            path = make_path([(0, 0), (5, -tail), (10, 0), (5, -3), (0, 0)])
-            path.line_width = 1.25
-
-            return path
+            return make_path([(0, 0), (5, -tail), (10, 0), (5, -3), (0, 0)], 1.25)
         else:
             return ui.Path()
         
         
-class Mountain:
+class Mountain(ShapeNode):
     def __init__(self, size):
-        self.points = [Point(0, 0), Point(10, 10)]
+        self.gen_points(size)
+
+        # shapes cant be larger than 2048 wide
+        downscale = size.x / 2047
+
+        ShapeNode.__init__(self, path=self.gen_path(1 / downscale), fill_color='clear', stroke_color='#bbb')
+        self.scale = downscale
+        self.anchor_point = (0, 0)
+
+    def gen_points(self, size):
+        self.points = [Point(0, 0), Point(20, 20)]
         x, y = 10, 10
         while x < size.w:
             dx = random.uniform(50, 100)
@@ -240,14 +247,14 @@ class Mountain:
             else:
                 dy = 0
             x = min(x + dx, size.w)
-            y = max(y + dy, 10)
+            y = max(y + dy, 20)
             self.points.append(Point(x, y))
         
     def gen_path(self, scale):
         """ scale points and make path """
 
         path = make_path([(x * scale, y * scale) for x, y in self.points])
-        path.line_width = 1.0
+        path.line_width = 1.5/5
 
         return path
 
@@ -291,20 +298,15 @@ class MyScene(Scene):
         print('setup')
         self.paused = True
         self.running = False
-        self.landings = 0
+        self.landings = []
         self.crashes = 0
 
         self.ship = Ship()
         self.ship.z_position = 1
         self.add_child(self.ship)
 
-        self.mtdata = Mountain(Size(5000, 300))
-        path = self.mtdata.gen_path(1 / 3)
-
-        self.mt = ShapeNode(path=path, fill_color=self.background_color, stroke_color='#bbb')
-        self.mt.scale = 3
-        self.mt.anchor_point = (0, 0)
-        self.z_position = 0
+        self.mt = Mountain(Size(10_000, 300))
+        self.mt.z_position = 0
         self.add_child(self.mt)
 
         self.label = LabelNode(text='', font=('Menlo', 20), parent=self)
@@ -328,25 +330,24 @@ class MyScene(Scene):
             adj = 20
 
             if self.landed:
-                if self.mtdata.is_above_ground(self.ship, adj):
+                if self.mt.is_above_ground(self.ship, adj):
                     self.landed = False
-                    self.label.text = ''
                 else:
-                    self.ship.y = self.mtdata.get_y(self.ship.x) + adj
+                    self.ship.y = self.mt.get_y(self.ship.x) + adj
                     self.ship.null()
             else:
-                level = self.mtdata.is_level(self.ship.x - 10, self.ship.x + 10)
+                level = self.mt.is_level(self.ship.x - 10, self.ship.x + 10)
                 hot = abs(self.ship.vy) > 1.0 or abs(self.ship.vx) > 0.30 or not level
 
                 self.label.text = f'vx:{self.ship.vx:+4.2f} vy:{self.ship.vy:+4.2f} r:{self.ship.r:4.2f} l:{level}'
                 self.label.color = '#f44' if hot else 'white'
 
-                if not self.mtdata.is_above_ground(self.ship, adj) and self.ship.vy < 0:
+                if not self.mt.is_above_ground(self.ship, adj) and self.ship.vy < 0:
                     if hot:
                         self.crash()
                     else:
                         self.land()
-                    self.ship.y = self.mtdata.get_y(self.ship.x) + adj
+                    self.ship.y = self.mt.get_y(self.ship.x) + adj
 
         # recompute scale and update positions of all children
         self.update_scale()
@@ -354,8 +355,8 @@ class MyScene(Scene):
         for c in self.children:
             if isinstance(c, Part):
                 c.update(self.dt)
-                if not self.mtdata.is_above_ground(c, 0):
-                    c.y = self.mtdata.get_y(c.x)
+                if not self.mt.is_above_ground(c, 0):
+                    c.y = self.mt.get_y(c.x)
                     c.vr = 0
                     c.vx = -c.vx / 2
 
@@ -384,8 +385,9 @@ class MyScene(Scene):
         self.scale = abs(value)
 
     def update_status(self):
+        landings = len([x for x in self.landings if x[3] == 'land'])
         self.stats.text = 'f: {:4.0f}  pos: {:+4.0f},{:4.0f}  a: {:4.2f}  r: {:+5.3f} ar: {:+5.3f} vr: {:+5.3f}  c/l: {}/{:}'.format(
-            self.ship.fuel, self.ship.x, self.ship.y, self.ship.a * 10, self.ship.r, self.ship.ar * 1000, self.ship.vr * 1000, self.crashes, self.landings)
+            self.ship.fuel, self.ship.x, self.ship.y, self.ship.a * 10, self.ship.r, self.ship.ar * 1000, self.ship.vr * 1000, self.crashes, landings)
 
     def touch_began(self, touch):
         if self.running:
@@ -394,6 +396,7 @@ class MyScene(Scene):
             else:
                 self.right_touch = touch
         else:
+            self.left_touch = self.right_touch = None
             self.reset()
 
     def touch_moved(self, touch):
@@ -444,15 +447,17 @@ class MyScene(Scene):
     def drop_ship(self, length):
         while True:
             x = random.uniform(length / 8, length * 7 / 8)
-            if self.mtdata.is_level(x - 10, x + 10):
+            if self.mt.is_level(x - 10, x + 10):
                 break
 
+        lh, rh = self.mt.get_points(x)
+        self.landings.append((self.t, lh, rh, 'drop'))
         self.landed = True
         self.ship.x = x
-        self.ship.y = self.mtdata.get_y(x)
+        self.ship.y = self.mt.get_y(x)
         self.ship.alpha = 1
 
-        print('dropped:', self.ship.x, self.ship.y, self.ship.r)
+        print('dropped:', lh, rh, self.ship.x, self.ship.y, self.ship.r)
 
     def crash(self):
         print('crash', self.ship.vx, self.ship.vy)
@@ -466,9 +471,17 @@ class MyScene(Scene):
     def land(self):
         self.landed = True
         # only give credit for a real flight
-        if self.ship.maxalt - self.ship.y > 15:
+        if self.ship.maxalt - self.ship.y > 20:
             self.ship.maxalt = self.ship.y
-            self.landings += 1
+
+            lh, rh = self.mt.get_points(self.ship.x)
+            
+            # only give credit for the first landing
+            if not  [x for x in self.landings
+                     if x[1] == lh and x[2] == rh and x[3] == 'land']:
+                self.landings.append((self.t, lh, rh, 'land'))
+                
+            print('landed', lh, rh, self.ship.x)
 
     def reset(self):
         self.ship.null()
