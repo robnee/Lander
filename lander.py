@@ -12,6 +12,8 @@ precnned mountains for testing
 MAX_EXTENT = 2000
 """ ui.Path coordinates greater than 2047 cause exceptions """
 
+BACKGROUND = (0.20, 0.20, 0.20, 1.0)
+
 
 def make_path(points, line_width=1.0):
     path = ui.Path()
@@ -120,15 +122,48 @@ class Sound(Node):
             self.ramp_start = self.effect.volume
             self.run_action(A.sequence(A.call(self.ramp, 0.2), A.call(self.done)))
             self.state = 'stopping'
- 
 
+
+class Starfield(Node):
+    """ background stars """
+
+    def __init__(self, size, count):
+        Node.__init__(self)
+        self.size = size
+        self.add_stars(count)
+    
+    def add_stars(self, count):
+        path = self.star_path()
+        for _ in range(count):
+            x, y = random.uniform(0, self.size.w), random.uniform(0, self.size.h)
+            star = ShapeNode(path=path, position=(x, y), fill_color='#fff', stroke_color='#fff')
+            star.run_action(
+                A.repeat(
+                    A.sequence(
+                        A.wait(random.uniform(2, 20)),
+                        A.fade_to(0.50, 1),
+                        A.fade_to(0.75, 1)
+                    ), 0
+                )
+            )
+            self.add_child(star)
+                
+    def star_path(self):
+        path = ui.Path()
+        path.move_to(0, 0)
+        path.add_arc(1, 1, 3, 2, 3)
+        path.line_width = 0.1
+        
+        return path
+
+        
 class Ship(ShapeNode, Particle):
     '''Player's ship'''
     
     MAX_THRUST = 5
 
     def __init__(self):
-        ShapeNode.__init__(self, path=self.ship_path(), fill_color='clear', stroke_color='#bbb')
+        ShapeNode.__init__(self, path=self.ship_path(), fill_color=BACKGROUND, stroke_color='#bbb')
         Particle.__init__(self)
         
         self.no_flame = ui.Path()
@@ -160,6 +195,7 @@ class Ship(ShapeNode, Particle):
 
         self.maxalt = max(self.maxalt, self.y)
 
+        self.flame.scale = random.uniform(0.99, 1.02)
         Particle.update(self, dt)
         
     def set_thrust(self, level):
@@ -189,7 +225,7 @@ class Ship(ShapeNode, Particle):
             
             prevx, prevy = x, y
             
-            p.vr = random.uniform(-0.2, 0.2)
+            p.vr = random.uniform(-0.3, 0.3)
             p.vx = self.vx + random.uniform(-1, 1)
             p.vy = self.vy * -0.3 + 1
             p.run_action(A.sequence(A.fade_to(0.25, 30), A.remove()))
@@ -263,12 +299,17 @@ class Mountain(Node):
             if width > MAX_EXTENT or p == end:
                 # get a sublist of points adjusted for the start of the panel
                 points = [p - Point(start_x, 0) for p in self.points[start_i:i]]
-                path = make_path(points, 1.5)
+                base = [Point(points[-1].x, 0), Point(0, 0), Point(0, points[0].y)]
                 
-                # add a tick mark to make sure that 0, 0 is represented for alignment
+                path = make_path(points + base, 1.5)
+                panel = ShapeNode(path=path, fill_color=BACKGROUND, stroke_color='clear')
+                panel.anchor_point = (0, 0)
+                panel.position = (start_x, 0)
+                self.add_child(panel)
+                
+                path = make_path(points, 1.5)
                 path.move_to(0, 0)
-                path.line_to(0.1, 0)
-
+                path.line_to(0, 0)
                 panel = ShapeNode(path=path, fill_color='clear', stroke_color='#bbb')
                 panel.anchor_point = (0, 0)
                 panel.position = (start_x, 0)
@@ -321,14 +362,21 @@ class MyScene(Scene):
         self.left_touch = None
         self.right_touch = None
 
+        self.background_color = BACKGROUND
+        
         self.ship = Ship()
         self.ship.z_position = 1
         self.add_child(self.ship)
 
-        self.mt = Mountain(Size(10_000, 300))
+        width = 30_000
+        self.mt = Mountain(Size(width, 300))
         self.mt.z_position = 0
         self.add_child(self.mt)
 
+        self.stars = Starfield(self.size, 200)
+        self.stars.z_position = -1
+        self.add_child(self.stars)
+        
         self.label = LabelNode(text='', font=('Menlo', 20), parent=self)
         self.label.position = (self.size.w / 2, self.size.h - 20)
         
@@ -383,7 +431,7 @@ class MyScene(Scene):
                 # viewport is centered on ship so just adjust for that
                 c.position = (self.size.w / self.scale / 2 + c.x - self.ship.x, c.y)
                 c.rotation = c.r
-
+            
         self.ship.position = Point(self.size.w / self.scale / 2, self.ship.y)
         self.ship.rotation = self.ship.r
         
@@ -392,6 +440,7 @@ class MyScene(Scene):
         self.label.position = Point(self.size.w / 2, self.size.h - 20) / self.scale
         self.label.scale = 1 / self.scale
         self.mt.position = Point(self.size.w / self.scale / 2 + 0 - self.ship.x, 0)
+        self.stars.scale = 1 / self.scale
 
         self.update_status()
 
@@ -425,7 +474,7 @@ class MyScene(Scene):
             if self.left_touch and touch.location.x < self.size.x / 2:
                 dist = touch.location.x - self.left_touch.location.x
                 if not self.landed and abs(dist) > 20:
-                    self.ship.rotate(dist / 50)
+                    self.ship.rotate(dist / 80)
                 else:
                     self.ship.rotate(0.0)
             elif self.right_touch:
@@ -513,4 +562,4 @@ class MyScene(Scene):
 
 if __name__ == '__main__':
     sound.stop_all_effects()
-    run(MyScene(), show_fps=False)
+    run(MyScene(), show_fps=True)
