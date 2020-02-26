@@ -6,7 +6,7 @@ import math
 
 """
 todo: increase magnification level
-precnned mountains for testing
+separate playfield node that would be scaled independntly from the starfield and text overlays
 """
 
 MAX_EXTENT = 2000
@@ -131,6 +131,7 @@ class Starfield(Node):
         Node.__init__(self)
         self.size = size
         self.add_stars(count)
+        #print(self.anchor_point)
     
     def add_stars(self, count):
         path = self.star_path()
@@ -364,16 +365,20 @@ class MyScene(Scene):
 
         self.background_color = BACKGROUND
         
+        self.playfield = Node(parent=self)
+        print(self.playfield.position)
+
         self.ship = Ship()
         self.ship.z_position = 1
-        self.add_child(self.ship)
+        self.playfield.add_child(self.ship)
 
         width = 30_000
         self.mt = Mountain(Size(width, 300))
         self.mt.z_position = 0
-        self.add_child(self.mt)
+        self.playfield.add_child(self.mt)
 
         self.stars = Starfield(self.size, 200)
+        
         self.stars.z_position = -1
         self.add_child(self.stars)
         
@@ -419,8 +424,9 @@ class MyScene(Scene):
 
         # recompute scale and update positions of all children
         self.update_scale()
-        
-        for c in self.children:
+     
+        print(self.playfield.bbox)
+        for c in self.playfield.children:
             if isinstance(c, Part):
                 c.update(self.dt)
                 if not self.mt.is_above_ground(c, 0):
@@ -432,15 +438,14 @@ class MyScene(Scene):
                 c.position = (self.size.w / self.scale / 2 + c.x - self.ship.x, c.y)
                 c.rotation = c.r
             
-        self.ship.position = Point(self.size.w / self.scale / 2, self.ship.y)
+        self.ship.position = Point(self.size.w / 2, self.ship.y)
+        #self.ship.position = Point(self.ship.x, self.ship.y)
         self.ship.rotation = self.ship.r
         
-        self.stats.position = Point(self.size.w / 2, self.size.h - 40) / self.scale
-        self.stats.scale = 1 / self.scale
-        self.label.position = Point(self.size.w / 2, self.size.h - 20) / self.scale
-        self.label.scale = 1 / self.scale
-        self.mt.position = Point(self.size.w / self.scale / 2 + 0 - self.ship.x, 0)
-        self.stars.scale = 1 / self.scale
+        # maintain these nodes in the same size and scale
+        self.mt.position = Point(self.size.w / self.scale / 2, 0)
+        #self.mt.playfield = Point(self.size.w / self.scale / 2 + 0 - self.ship.x, 0)
+        #self.stars.scale = 1 / self.scale
 
         self.update_status()
 
@@ -451,7 +456,7 @@ class MyScene(Scene):
         else:
             value = 1
 
-        self.scale = abs(value)
+        self.playfield.scale = abs(value)
 
     def update_status(self):
         landings = len([x for x in self.landings if x[3] == 'land'])
