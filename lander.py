@@ -1,8 +1,10 @@
 from scene import Scene, Node, ShapeNode, LabelNode, Size, Point, Action as A, run
 import ui
+import sys
 import sound
 import random
 import math
+import timeit
 
 """
 todo: increase magnification level
@@ -37,6 +39,25 @@ def make_path(points, line_width=1.0):
             move = True
 
     return path
+
+
+def line_intersection(line1, line2):
+    """ Paul Draper via StackOverflow """
+
+    xdiff = (line1[0][0] - line1[1][0], line2[0][0] - line2[1][0])
+    ydiff = (line1[0][1] - line1[1][1], line2[0][1] - line2[1][1])
+
+    def det(a, b):
+        return a[0] * b[1] - a[1] * b[0]
+
+    div = det(xdiff, ydiff)
+    if div == 0:
+       raise ValueError('lines do not intersect')
+
+    d = (det(*line1), det(*line2))
+    x = det(d, xdiff) / div
+    y = det(d, ydiff) / div
+    return x, y
 
 
 class Particle:
@@ -136,7 +157,8 @@ class Starfield(Node):
         path = self.star_path()
         for _ in range(count):
             x, y = random.uniform(0, self.size.w), random.uniform(0, self.size.h)
-            star = ShapeNode(path=path, position=(x, y), fill_color='#fff', stroke_color='#fff')
+            c = (random.uniform(0.7, 1), random.uniform(0.7, 1), random.uniform(0.7, 1))
+            star = ShapeNode(path=path, position=(x, y), fill_color=c, stroke_color=c)
             star.run_action(
                 A.repeat(
                     A.sequence(
@@ -267,18 +289,18 @@ class Ship(ShapeNode, Particle):
         
 class Mountain(Node):
     
-    def __init__(self, size):
+    def __init__(self, size, detail=10):
         Node.__init__(self)
         self.anchor_point = (0, 0)
         
-        self.generate_mountain(size)
-        self.generate_shapes()
+        self.generate_mountain(size, detail)
+        self.generate_tiles()
     
-    def generate_mountain(self, size):
-        self.points = [Point(0, 0), Point(20, 20)]
-        x, y = 10, 10
+    def generate_mountain(self, size, detail):
+        x, y, v = 10, 10, size.h / detail
+        self.points = [Point(0, 0), Point(x, y)]
         while x < size.w:
-            dx = random.uniform(40, 80)
+            dx = random.uniform(v, 2 * v)
             if random.uniform(0, 1) < 0.6:
                 dy = random.uniform(-size.h, size.h)
             else:
@@ -289,51 +311,63 @@ class Mountain(Node):
 
             self.points.append(Point(x, y))
 
-    def generate_shapes(self):
+    def generate_tiles(self):
         start_i = 0
         end = self.points[-1]
         for i, p in enumerate(self.points):
             start_x = self.points[start_i].x
             width = p.x - start_x
-            # shapes cant be larger than 2048 wide so create multiple ShapeNodes
+            # shapes cant be larger than 2048 wide so create multiple tiled ShapeNodes
             if width > MAX_EXTENT or p == end:
                 # get a sublist of points adjusted for the start of the panel
                 points = [p - Point(start_x, 0) for p in self.points[start_i:i]]
                 base = [Point(points[-1].x, 0), Point(0, 0), Point(0, points[0].y)]
                 
                 path = make_path(points + base, 1.5)
-                panel = ShapeNode(path=path, fill_color=BACKGROUND, stroke_color='clear')
-                panel.anchor_point = (0, 0)
-                panel.position = (start_x, 0)
-                self.add_child(panel)
+                tile = ShapeNode(path=path, fill_color=BACKGROUND, stroke_color='clear')
+                self.add_tile(tile, start_x)
                 
                 path = make_path(points, 1.5)
-                path.move_to(0, 0)
+                path.move_to(0, 0)  # make sure that the origin is part of the path
                 path.line_to(0, 0)
-                panel = ShapeNode(path=path, fill_color='clear', stroke_color='#bbb')
-                panel.anchor_point = (0, 0)
-                panel.position = (start_x, 0)
-                self.add_child(panel)
+                tile = ShapeNode(path=path, fill_color='clear', stroke_color='#bbb')
+                self.add_tile(tile, start_x)
 
                 start_i = i - 1
     
-    def get_points(self, x):
-        if x >= 0:
-            pp = self.points[0]
-            for p in self.points[1:]:
-                if x < p.x:
-                    return pp, p
-                pp = p
+    def add_tile(self, tile, x):
+        tile.anchor_point = (0, 0)
+        tile.position = (x, 0)
+        self.add_child(tile)
+
+    def get_line(self, x):
+        lo = 0
+        hi = len(self.points)
+        while True:
+            i = (hi + lo) // 2
+            p = self.points[i]
+            if x < p.x:
+                hi = i
+            else:
+                lo = i
+
+            if hi - lo < 2:
+                return self.points[hi - 1], self.points[hi]
 
         return None, None
              
     def get_y(self, x):
-        pp, p = self.get_points(x)
+        pp, p = self.get_line(x)
         if pp and p:
             slope = (p.y - pp.y) / (p.x - pp.x)
             return pp.y + slope * (x - pp.x)
   
         return 0
+        
+    def get_slope(self, x):
+        pp, p = self.get_line(x)
+        if pp and p:
+            return (p.y - pp.y) / (p.x - pp.x)
 
     def is_level(self, x1, x2):
         if x1 > 0 and x2 > 0:
@@ -351,10 +385,12 @@ class Mountain(Node):
         ground_level = self.get_y(particle.x) + dy
         return particle.y > ground_level
 
+    def collision(self, part):
+        y = self.get_y(part.x)
+        
 
 class MyScene(Scene):
     def setup(self):
-        print('setup')
         self.paused = True
         self.running = False
         self.landings = []
@@ -369,7 +405,8 @@ class MyScene(Scene):
         self.add_child(self.ship)
 
         width = 30_000
-        self.mt = Mountain(Size(width, 300))
+        height = 300
+        self.mt = Mountain(Size(width, height))
         self.mt.z_position = 0
         self.add_child(self.mt)
 
@@ -435,13 +472,15 @@ class MyScene(Scene):
         self.ship.position = Point(self.size.w / self.scale / 2, self.ship.y)
         self.ship.rotation = self.ship.r
         
+        self.mt.position = Point(self.size.w / self.scale / 2 + 0 - self.ship.x, 0)
+        
+        self.stars.scale = 1 / self.scale
+
         self.stats.position = Point(self.size.w / 2, self.size.h - 40) / self.scale
         self.stats.scale = 1 / self.scale
         self.label.position = Point(self.size.w / 2, self.size.h - 20) / self.scale
         self.label.scale = 1 / self.scale
-        self.mt.position = Point(self.size.w / self.scale / 2 + 0 - self.ship.x, 0)
-        self.stars.scale = 1 / self.scale
-
+        
         self.update_status()
 
     def update_scale(self):
@@ -474,24 +513,24 @@ class MyScene(Scene):
             if self.left_touch and touch.location.x < self.size.x / 2:
                 dist = touch.location.x - self.left_touch.location.x
                 if not self.landed and abs(dist) > 20:
-                    self.ship.rotate(dist / 80)
+                    self.rotate(dist / 80)
                 else:
-                    self.ship.rotate(0.0)
+                    self.rotate(0.0)
             elif self.right_touch:
                 dist = -touch.location.y + self.right_touch.location.y
-                self.ship.set_thrust(max((dist - 5) / 10, 0))
+                self.thrust(max((dist - 5) / 10, 0))
 
     def touch_ended(self, touch):
         if touch.location.x < self.size.x / 2:
-            self.ship.rotate(0)
+            self.rotate(0)
         else:
             self.ship.thrust_ramp = 0.5
 
     def controller_changed(self, id, key, value):
         if key == 'thumbstick_left':
-            self.ship.rotate(value[0])
+            self.rotate(value[0])
         elif key == 'trigger_right':
-            self.ship.set_thrust(value * 4)
+            self.thrust(value * 4)
         elif key == 'button_b' and value:
             self.fire()
         elif key == 'button_x' and value:
@@ -499,6 +538,12 @@ class MyScene(Scene):
         elif key == 'button_y' and value:
             self.ship.fuel += 100
 
+    def rotate(self, r):
+        self.ship.rotate(r)
+        
+    def thrust(self, t):
+        self.ship.set_thrust(t)
+        
     def fire(self):
         path = make_path([(0, 0), (0, 1)])
         path.line_width = 2
@@ -513,20 +558,25 @@ class MyScene(Scene):
         
         sound.play_effect('fire.mp3', looping=False, volume=0.0)
 
+    def reset(self):
+        self.ship.null()
+        self.drop_ship(5000)
+        self.label.text = ''
+        self.running = True
+        self.paused = False
+
     def drop_ship(self, length):
         while True:
             x = random.uniform(length / 8, length * 7 / 8)
             if self.mt.is_level(x - 10, x + 10):
                 break
 
-        lh, rh = self.mt.get_points(x)
+        lh, rh = self.mt.get_line(x)
         self.landings.append((self.t, lh, rh, 'drop'))
         self.landed = True
         self.ship.x = x
         self.ship.y = self.mt.get_y(x)
         self.ship.alpha = 1
-
-        print('dropped:', lh, rh, self.ship.x, self.ship.y, self.ship.r)
 
     def crash(self):
         print('crash', self.ship.vx, self.ship.vy)
@@ -543,7 +593,7 @@ class MyScene(Scene):
         if self.ship.maxalt - self.ship.y > 20:
             self.ship.maxalt = self.ship.y
 
-            lh, rh = self.mt.get_points(self.ship.x)
+            lh, rh = self.mt.get_line(self.ship.x)
             
             # only give credit for the first landing
             if not  [x for x in self.landings
@@ -551,15 +601,58 @@ class MyScene(Scene):
                 self.landings.append((self.t, lh, rh, 'land'))
                 
             print('landed', lh, rh, self.ship.x)
-
-    def reset(self):
-        self.ship.null()
-        self.drop_ship(5000)
-        self.label.text = ''
-        self.running = True
-        self.paused = False
     
 
+class Spin(Scene):
+    def setup(self):
+        print('setup')
+        width = 30_000
+        mt = Mountain(Size(width, 300))
+        
+        self.l1 = Part([(150, 150), (5, 5)])
+        self.l1.rotation = 0
+        self.l1.position = (self.size.w / 2, self.size.h / 2)
+        self.l1.run_action(A.repeat_forever(A.rotate_by(0.2)))
+        self.add_child(self.l1)
+
+        self.l2 = Part([(2, 2), (100, 100)])
+        self.l2.position = (self.size.w / 3, self.size.h / 2)
+        self.l2.run_action(A.repeat_forever(A.rotate_by(0.3)))
+        self.add_child(self.l2)
+
+        # print(f'par: {x.parent} pos: {x.position} {x.points} size: {x.size} anch: {x.anchor_point} bbox {x.bbox} frame: {x.frame}')
+        # print(f'par: {y.parent} pos: {y.position} {y.points} size: {y.size} anch: {y.anchor_point} bbox: {y.bbox} frame: {y.frame}')
+
+        #print(x.point_to_scene(x.points[0]))
+        #print(y.point_to_scene(y.points[0]))
+        
+        self.stats = LabelNode(text='stats', font=('Menlo', 16), parent=self)
+        self.stats.position = (self.size.w / 2, self.size.h / 3)
+        self.stats.z_position = 5
+        print('setup end')
+
+    def update(self):
+        try:
+            a = self.l1.points[0:2]
+            b = self.l2.points[0:2]
+            # todo: convert points to same coords
+            print(a, b)
+            print([self.l1.point_to_scene(p) for p in a])
+            f = line_intersection(a, b)
+            self.stats.text = f'{f}'
+        except ValueError:
+            pass
+            print('update', self.t)
+            #self.stats.text = 'none'
+
+
+def test():
+    p = Spin()
+    run(p, show_fps=True)
+    sys.exit()
+    
+    
 if __name__ == '__main__':
     sound.stop_all_effects()
+    test()
     run(MyScene(), show_fps=True)
