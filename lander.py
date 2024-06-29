@@ -12,7 +12,7 @@ precnned mountains for testing
 MAX_EXTENT = 2000
 """ ui.Path coordinates greater than 2047 cause exceptions """
 
-BACKGROUND = (0.20, 0.20, 0.20, 1.0)
+BACKGROUND = (0.15, 0.15, 0.15, 1.0)
 
 
 def make_path(points, line_width=1.0):
@@ -40,8 +40,13 @@ def make_path(points, line_width=1.0):
 
 
 class Particle:
-    '''Physics for partical motion in 2D space'''
+    '''Physics for particle motion in 2D space. Accel units are per dt'''
 
+    gx = 0.0
+    gy = -0.025
+    fr = 0.98
+    fv = 0.999
+    
     def __init__(self):
         self.m = 0
         self.r = 0
@@ -53,16 +58,13 @@ class Particle:
         self.ay = 0.0
         self.vx = 0.0
         self.vy = 0.0
-        self.fr = 0.99
-        self.gx = 0.0
-        self.gy = -0.025
 
     def update(self, dt):
         self.vr = self.vr * self.fr + self.ar
         self.r += self.vr
 
-        self.vx = self.vx * 0.999 + self.ax + self.gx
-        self.vy = self.vy * 0.999 + self.ay + self.gy
+        self.vx = self.vx * self.fv + self.ax + self.gx
+        self.vy = self.vy * self.fv + self.ay + self.gy
         self.x += self.vx
         self.y += self.vy
 
@@ -160,7 +162,8 @@ class Starfield(Node):
 class Ship(ShapeNode, Particle):
     '''Player's ship'''
     
-    MAX_THRUST = 5
+    MAX_THRUST = 300
+    FLICKER = 0.97
 
     def __init__(self):
         ShapeNode.__init__(self, path=self.ship_path(), fill_color=BACKGROUND, stroke_color='#bbb')
@@ -172,7 +175,7 @@ class Ship(ShapeNode, Particle):
         self.rjet = ShapeNode(path=self.no_flame, fill_color=(0, 0, 1.0, 0.1), stroke_color=(0, 1.0, 1.0, 0.5), parent=self)
         
         self.maxalt = 0
-        self.fuel = 5000
+        self.fuel = 10000
         self.mass = 1000
         self.thrust = 0
         self.thrust_ramp = 0
@@ -184,18 +187,19 @@ class Ship(ShapeNode, Particle):
             self.set_thrust(max(self.thrust - self.thrust_ramp, 0))
             self.thrust_ramp = min(self.thrust_ramp, self.thrust)
 
-        dfuel = self.thrust * 10 * dt
+        dfuel = self.thrust / 2.0 * dt
         if self.fuel < dfuel:
             self.set_thrust(self.fuel / (10 * dt))
             self.fuel = 0
         else:
             self.fuel -= dfuel
 
-        self.a = self.thrust * 50 / (self.mass + self.fuel)
+        self.a = self.thrust / (self.mass + self.fuel)
 
         self.maxalt = max(self.maxalt, self.y)
 
-        self.flame.scale = random.uniform(0.99, 1.02)
+        # flicker
+        self.flame.scale = random.uniform(self.FLICKER, 1 / self.FLICKER)
         Particle.update(self, dt)
         
     def set_thrust(self, level):
@@ -203,8 +207,10 @@ class Ship(ShapeNode, Particle):
             level = 0
 
         self.thrust = min(level, self.MAX_THRUST)
+        throttle_pct = self.thrust / self.MAX_THRUST
     
         self.flame.path = self.flame_path(self.thrust)
+        self.flame.fill_color = (throttle_pct / 2, throttle_pct / 2, 1.0, 0.4)
         self.flame.position = (0, (-30 - self.flame.path.bounds.h) / 2)
         
         if level > 0.0:
@@ -258,7 +264,7 @@ class Ship(ShapeNode, Particle):
         
     def flame_path(self, level):
         if level > 0:
-            tail = level * 40
+            tail = level / 2
         
             return make_path([(0, 0), (5, -tail), (10, 0), (5, -3), (0, 0)], 1.25)
         else:
@@ -456,7 +462,7 @@ class MyScene(Scene):
     def update_status(self):
         landings = len([x for x in self.landings if x[3] == 'land'])
         self.stats.text = 'f: {:4.0f}  pos: {:+4.0f},{:4.0f}  a: {:4.2f}  r: {:+5.3f} ar: {:+5.3f} vr: {:+5.3f}  c/l: {}/{:}'.format(
-            self.ship.fuel, self.ship.x, self.ship.y, self.ship.a * 10, self.ship.r, self.ship.ar * 1000, self.ship.vr * 1000, self.crashes, landings)
+            self.ship.fuel, self.ship.x, self.ship.y, self.ship.a * 100, self.ship.r, self.ship.ar * 1000, self.ship.vr * 1000, self.crashes, landings)
 
     def touch_began(self, touch):
         if self.running:
@@ -474,18 +480,19 @@ class MyScene(Scene):
             if self.left_touch and touch.location.x < self.size.x / 2:
                 dist = touch.location.x - self.left_touch.location.x
                 if not self.landed and abs(dist) > 20:
-                    self.ship.rotate(dist / 80)
+                    self.ship.rotate(dist / 100)
                 else:
                     self.ship.rotate(0.0)
             elif self.right_touch:
-                dist = -touch.location.y + self.right_touch.location.y
-                self.ship.set_thrust(max((dist - 5) / 10, 0))
+                dist = self.right_touch.location.y - touch.location.y
+                thrust = max(dist, 0) * 4
+                self.ship.set_thrust(thrust)
 
     def touch_ended(self, touch):
         if touch.location.x < self.size.x / 2:
             self.ship.rotate(0)
         else:
-            self.ship.thrust_ramp = 0.5
+            self.ship.thrust_ramp = 10
 
     def controller_changed(self, id, key, value):
         if key == 'thumbstick_left':
